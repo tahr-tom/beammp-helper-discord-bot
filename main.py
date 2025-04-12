@@ -15,7 +15,6 @@ import requests
 COMPOSE_FILE_PATH = "/opt/docker/beammp-server/compose.yml"
 BACKUP_PATH = "/opt/docker/beammp-server/compose.yml.bak"
 COMPOSE_DIR = "/opt/docker/beammp-server"
-LOG_PATH = "/opt/discord-bot/beammp-helper/edit_log.txt"
 CONTAINER_NAME = "beammp-server"
 ENV_VAR_NAME = "BEAMMP_MAP"
 SERVER_CONFIG_PATH = "/opt/docker/beammp-server/ServerConfig.toml"
@@ -45,7 +44,7 @@ def fetch_maps_from_url():
     try:
         response = requests.get(MAPS_JSON_URL, timeout=5)
         response.raise_for_status()
-        print("[Map Sync] Map list refreshed from URL.")
+        print(f"[Map Sync] Map list refreshed from URL. {len(response.json())} maps loaded")
         return response.json()
     except requests.RequestException as e:
         print(f"[Map Sync] Request error while fetching map list: {e}")
@@ -134,8 +133,7 @@ class MapSelector(discord.ui.Select):
                     f"⚠️ Update failed. Rolled back. Container **{CONTAINER_NAME}** not running.",
                     ephemeral=True
                 )
-                with open(LOG_PATH, "a") as log:
-                    log.write(f"[{timestamp}] {author} tried to set {ENV_VAR_NAME} to {new_value} — ROLLBACK.\n")
+                print(f"[Set Map] [{timestamp}] {author} tried to set {ENV_VAR_NAME} to {new_value} — ROLLBACK")
                 return
 
             # Find the label (display name) for the selected map
@@ -153,8 +151,8 @@ class MapSelector(discord.ui.Select):
                 ephemeral=True
             )
 
-            with open(LOG_PATH, "a") as log:
-                log.write(f"[{timestamp}] {author} set {ENV_VAR_NAME} to {new_value} — SUCCESS\n")
+            print(f"[Set Map] [{timestamp}] {author} set {ENV_VAR_NAME} to {new_value} — SUCCESS\n")
+
 
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
