@@ -69,17 +69,23 @@ bot = commands.Bot(intents=intents)
 # === VIEWS ===
 class MapDropdown(discord.ui.View):
     def __init__(self):
-        super().__init__()
+        super().__init__(timeout=None)
+        self.message = None  # Will be set after sending
         options = [
             discord.SelectOption(label=info["label"], value=key)
             for key, info in MAP_CHOICES.items()
         ]
-        self.add_item(MapSelector(options))
+        self.add_item(MapSelector(options, self))  # Pass view to the select
+
+    def disable_all_items(self):
+        for item in self.children:
+            item.disabled = True
 
 
 class MapSelector(discord.ui.Select):
-    def __init__(self, options):
+    def __init__(self, options, parent_view):
         super().__init__(placeholder="Select a map to apply", options=options)
+        self.parent_view = parent_view
 
     async def callback(self, interaction: discord.Interaction):
         selected_key = self.values[0]
@@ -88,17 +94,24 @@ class MapSelector(discord.ui.Select):
         author = interaction.user.display_name
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Acknowledge the interaction immediately
-        await interaction.response.send_message(f"Processing your map update. Please wait...", ephemeral=True)
+        # Disable all items in the view (like the dropdown)
+        self.parent_view.disable_all_items()
 
-        # Perform the docker compose restart asynchronously
+        # Immediately disable dropdown in the original message
+        if self.parent_view.message:
+            await self.parent_view.message.edit(view=self.parent_view)
+
+        # Acknowledge early
+        await interaction.response.send_message("Processing your map update...", ephemeral=True)
+
+        # Run the update task
         asyncio.create_task(self.update_docker_compose(interaction, new_value, author, timestamp))
 
     async def update_docker_compose(self, interaction: discord.Interaction, new_value: str, author: str,
                                     timestamp: str):
         try:
+            # Save backup and update the compose file...
             shutil.copy(COMPOSE_FILE_PATH, BACKUP_PATH)
-
             with open(COMPOSE_FILE_PATH, "r") as f:
                 lines = f.readlines()
 
@@ -118,7 +131,6 @@ class MapSelector(discord.ui.Select):
             with open(COMPOSE_FILE_PATH, "w") as f:
                 f.writelines(lines)
 
-            # Docker Compose commands run asynchronously
             subprocess.run("docker compose down", cwd=COMPOSE_DIR, shell=True, check=True)
             subprocess.run("docker compose up -d", cwd=COMPOSE_DIR, shell=True, check=True)
 
@@ -133,26 +145,16 @@ class MapSelector(discord.ui.Select):
                     f"⚠️ Update failed. Rolled back. Container **{CONTAINER_NAME}** not running.",
                     ephemeral=True
                 )
-                print(f"[Set Map] [{timestamp}] {author} tried to set {ENV_VAR_NAME} to {new_value} — ROLLBACK")
                 return
 
-            # Find the label (display name) for the selected map
-            label_name = None
-            for _, info in MAP_CHOICES.items():
-                if info["value"] == new_value:
-                    label_name = info["label"]
-                    break
+            # Get label
+            label_name = next((info["label"] for info in MAP_CHOICES.values() if info["value"] == new_value), new_value)
 
-            if not label_name:
-                label_name = new_value  # fallback to raw path if no label is found
+            # Update the original dropdown message to remove view
+            if self.parent_view.message:
+                await self.parent_view.message.edit(content=f"✅ Set map to **{label_name}**.", view=None)
 
-            await interaction.followup.send(
-                f"✅ Set map to **{label_name}**. Container is up and running. Please rejoin server",
-                ephemeral=True
-            )
-
-            print(f"[Set Map] [{timestamp}] {author} set {ENV_VAR_NAME} to {new_value} — SUCCESS\n")
-
+            await interaction.followup.send("Map updated and container is running! ✅", ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
@@ -188,7 +190,9 @@ async def set_map(ctx: discord.ApplicationContext):
         await ctx.respond("🚫 You don't have the required role.", ephemeral=True)
         return
 
-    await ctx.respond("Choose a map to set:", view=MapDropdown(), ephemeral=True)
+    view = MapDropdown()
+    msg = await ctx.respond("Choose a map:", view=view)
+    view.message = await msg.original_response()
 
 
 @bot.slash_command(name="show-current-map", description="Show the currently set map info")
